@@ -20,8 +20,8 @@ const snsClient = new SNSClient({ region: process.env.REGION });
  * below as needed!
  */
 const mediaPrompts = {
-    'dog': 'Is there a dog in this image? If yes, determine the breed. Give your response in JSON where the is_dog variable determines whether a dog is present and the breed variable is your determination of breed.',
-    'screenshot': 'Is this image a screenshot and if yes, is there a warning message? Respond with a yes or no regarding the screenshot and if there are warning messages, summarize them in less than 15 words.',
+    'dog': 'Is there a dog in this image? If yes, determine the breed. Give your response in JSON where the is_dog variable declares whether a dog is present and the breed variable is your determination of breed.',
+    'screenshot': 'Is this image a screenshot? If yes, is there a warning message? Respond with a yes or no regarding if there are warning messages. Summarize the messages in less than 15 words.',
     'category': 'Can this image be categorized as a photograph, a cartoon, a drawing, or a screenshot? Give your response in JSON where the category goes in the category variable and then add a description variable and give a concise description of the image. Respond with a JSON object with category and description properties.',
     'text': 'Is there any text in this image? If yes, what are the first few words.',
     'insurance':'Does this image show damage to a vehicle? If yes, where is the damage and what type of vehicle?',
