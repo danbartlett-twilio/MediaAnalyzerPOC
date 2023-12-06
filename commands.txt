@@ -1,0 +1,1 @@
+sam deploy --stack-name WebhookMediaAnalyzerPOC --template template.yaml --profile YOUR-AWS-PROFILE

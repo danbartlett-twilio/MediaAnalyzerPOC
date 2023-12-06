@@ -1,0 +1,17 @@
+{
+    "name": "send-openai-reply-sms",
+    "version": "1.0.0",
+    "description": "",
+    "main": "app.cjs",
+    "type": "module",
+    "repository": "",
+    "author": "",
+    "license": "MIT",
+    "dependencies": {    
+    },
+    "scripts": {
+    },
+    "devDependencies": {
+    }
+  }
+  

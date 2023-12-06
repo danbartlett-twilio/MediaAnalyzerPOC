@@ -1,0 +1,384 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: This stack spins up a proof of concepty that shows how businesses can interact with their customers using Images via MMM and Twilio and OpenAI's Vision model.
+
+Resources:
+
+  ##########################################################################
+  #  SQS Queue                 
+  #
+  #  This queue holds for processing the POST requests sent from Twilio.
+  #  The queue handles spikey traffic so that the downstream functions are
+  #  not overrun by spikey traffic.
+  ##########################################################################
+  TwilioMessagingWebhookQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TwilioMessagingWebhookQueue
+
+  ##########################################################################
+  #  SNS Topic => TwilioMessagingWebhookTopic
+  #
+  #  Any message that is NOT an image or media AND and image / media message
+  #  that has been analyzed by OpenAI get sent to this topic for 
+  #  additional processing by any topic subscribers.
+  ##########################################################################  
+  TwilioMessagingWebhookTopic:
+    Type: AWS::SNS::Topic
+
+  ##########################################################################
+  #  SNS Topic => TwilioMessagingWebhookMediaTopic
+  #
+  #  Any message that contains a image/media file that needs to be analyzed
+  #  by OpenAI is sent to this topic.
+  ##########################################################################  
+  TwilioMessagingWebhookMediaTopic:
+    Type: AWS::SNS::Topic
+
+  ##########################################################################
+  #  S3 Bucket
+  #                          
+  #  Bucket to store all webhooks sent from Twilio. Objects that are stored
+  #  for images/media will ALSO contain the results from the OpenAI analysis.
+  ########################################################################## 
+  TwilioMessagingWebhookBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "twilio-messaging-webhook-${AWS::AccountId}-${AWS::Region}"  
+  TwilioMessagingWebhookBucketPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref TwilioMessagingWebhookBucket
+                - /*     
+
+  ##########################################################################
+  #  HTTP API                                                             
+  #
+  #  This api receives POST Webhook requests from Twilio and
+  #  sends them directly to an SQS queue for processed. 
+  ##########################################################################
+  TwilioMessagingWebhookApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      AccessLogSettings:
+        DestinationArn: !GetAtt TwilioMessagingWebhookApiLogs.Arn
+        Format: '{ "requestId":"$context.requestId", "ip": "$context.identity.sourceIp", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod","routeKey":"$context.routeKey", "status":"$context.status","protocol":"$context.protocol", "responseLength":"$context.responseLength" }'
+      # This points to a separate yaml file!
+      DefinitionBody:
+        'Fn::Transform':
+          Name: 'AWS::Include'
+          Parameters:
+            Location: 'api.yaml'
+      StageVariables:
+        AUTH_LEVEL: 'PRIVATE'
+
+  ##########################################################################
+  #  Lambda Layers
+  #                          
+  #  Key code snippets and libraries separated in Lambda layers to 
+  #  simplify code and allow for reuse.
+  ##########################################################################
+  CalculateTwilioSignatureForWebhookLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: CalculateTwilioSignature
+      Description: Calculate x-twilio-signature from parameters
+      ContentUri: layers/calculate-twilio-signature-for-webhook/
+      CompatibleRuntimes:
+        - nodejs18.x
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain
+  CryptoForTwilioWebhookLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: CryptoForTwilioWebhook
+      Description: Used for cryptographic functionality
+      ContentUri: layers/layer-crypto-twilio-webhooks/
+      CompatibleRuntimes:
+        - nodejs18.x
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain      
+  OpenAILayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: OpenAILayer
+      Description: OpenAI Node.js library
+      ContentUri: layers/layer-openai/
+      CompatibleRuntimes:
+        - nodejs18.x
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain
+  TwilioLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: TwilioLayer
+      Description: Twilio node js sdk. Used to interact with Twilio API.
+      ContentUri: layers/layer-twilio/
+      CompatibleRuntimes:
+        - nodejs18.x
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain      
+
+  ##########################################################################
+  #  Lambda Function => TwilioWebhookQueueLambdaFunction                          
+  #                          
+  #  This function receives messages from SQS queue, checks the x-twilio-sig
+  #  and, if matches, publishes to an SNS topic. Also checks if the message
+  #  contains any media, if yes, media are separated and submitted to 
+  # a separate SNS topic for AI analysis. 
+  ##########################################################################
+  TwilioWebhookQueueLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:      
+      Description: Lambda to be invoked by the SQS Queue as Webhooks from Twilio arrive.
+      CodeUri: lambdas/handle-webhook-sqs-messages/
+      Handler: app.lambdaHandler
+      AutoPublishAlias: live
+      Runtime: nodejs18.x
+      Architectures:
+        - arm64
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          ##############################################
+          # In this lambda the TWILIO Auth Token is used
+          # to validate incoming webhooks
+          ##############################################
+          # Set your Auth Token below...
+          # DO NOT STORE VALUES LIKE THIS IN PRODUCTION CODE!...
+          TWILIO_AUTH_TOKEN: "<YOUR-TEST-TWILIO-AUTH-TOKEN>"          
+          # Use a secure method for production such as 
+          # pulling from the AWS Parameter Store or Secrets Manager.
+          # For example:
+          # TWILIO_AUTH_TOKEN: '{{resolve:ssm:TWILIO_AUTH_TOKEN}}'                    
+          SNS_TOPIC: !Ref TwilioMessagingWebhookTopic
+          SNS_MEDIA_TOPIC: !Ref TwilioMessagingWebhookMediaTopic
+          REGION: !Ref "AWS::Region"
+      Layers:
+        - !Ref CryptoForTwilioWebhookLayer
+        - !Ref CalculateTwilioSignatureForWebhookLayer
+      Events:
+        TwilioMessagingWebhookQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TwilioMessagingWebhookQueue.Arn
+            # With batch size at 1 and MaximumConcurrency at 2, the
+            # lambda will only pull messages from the queue slowly.            
+            BatchSize: 1
+            ScalingConfig:
+              MaximumConcurrency: 2           
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt TwilioMessagingWebhookTopic.TopicName 
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt TwilioMessagingWebhookMediaTopic.TopicName  
+
+  ##########################################################################
+  #  Lambda Function => CallOpenAIFunction                            
+  #                          
+  #  This function is invoked by the SNS Media topic. It parses the message,
+  #  selects the best prompt, builds the api call, calls OpenAI, waits
+  #  for the response, publishes the response to the SNS topic for additional
+  #  processing.
+  ##########################################################################
+  CallOpenAIFunction:
+    Type: AWS::Serverless::Function
+    Properties:      
+      Description: Invoked by SNS Media Topic, calls OpenAI to analyze image.
+      CodeUri: lambdas/call-openai/
+      Handler: app.lambdaHandler
+      AutoPublishAlias: live
+      Runtime: nodejs18.x
+      Architectures:
+        - arm64
+      # Timeout is 50 seconds! Production use should likely
+      # be something different than a Lambda function!
+      Timeout: 50
+      MemorySize: 256
+      Environment:
+        Variables:
+          ##############################################
+          # This lambda needs your OpenAI API Key!
+          # Set an API Key below for TESTING/POC
+          # DO NOT STORE VALUES LIKE THIS IN PRODUCTION CODE!...
+          OPENAI_API_KEY: "<YOUR-TEST-OPEN-AI-API-KEY>"          
+          # Use a secure method for production such as 
+          # pulling from the AWS Parameter Store or Secrets Manager.
+          # For example:
+          # OPENAI_API_KEY: '{{resolve:ssm:OPENAI_API_KEY}}'                    
+          SNS_TOPIC: !Ref TwilioMessagingWebhookTopic
+          REGION: !Ref "AWS::Region"
+      Layers:
+        - !Ref OpenAILayer
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref 'TwilioMessagingWebhookMediaTopic'                        
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt TwilioMessagingWebhookTopic.TopicName 
+
+  ##########################################################################
+  #  Lambda Function => TwilioWebhookQueueLambdaFunction                          
+  #                          
+  #  This function receives messages from SNS topic and writes json
+  #  file to S3 bucket.
+  ##########################################################################
+  TwilioWriteWebhookToS3Function:
+    Type: AWS::Serverless::Function
+    Properties:      
+      Description: Lambda invoked by SNS topics, writes to S3
+      CodeUri: lambdas/save-webhook-to-s3/
+      Handler: app.lambdaHandler
+      AutoPublishAlias: live
+      Runtime: nodejs18.x
+      Architectures:
+        - arm64
+      Role: !GetAtt TwilioWriteWebhookToS3FunctionRole.Arn
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          REGION: !Ref "AWS::Region"
+          DestinationBucket: !Sub "twilio-messaging-webhook-${AWS::AccountId}-${AWS::Region}"
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref 'TwilioMessagingWebhookTopic'
+
+  ##########################################################################
+  #  Role for Lambda Function                            
+  #                          
+  #  Allow lambda function to write to S3 bucket.
+  ##########################################################################
+  TwilioWriteWebhookToS3FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole    
+      ManagedPolicyArns:        
+        - !Ref TwilioMessagingWebhookBucketPolicy
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  ##########################################################################
+  #  Lambda Function => TwilioWebhookQueueLambdaFunction                          
+  #                          
+  #  This function receives messages from SNS topic, checks if the message
+  #  contains an image analysis from OpenAI, if yes, it calls the Twilio
+  #  API to return a reply message back to the sender.
+  ##########################################################################
+  SendOpenAIReplySMSFunction:
+    Type: AWS::Serverless::Function
+    Properties:      
+      Description: Lambda invoked by SNS topics, sends reply sms for results from OpenAI image analysis
+      CodeUri: lambdas/send-openai-reply-sms/
+      Handler: app.lambdaHandler
+      AutoPublishAlias: live
+      Runtime: nodejs18.x
+      Architectures:
+        - arm64      
+      Timeout: 20
+      MemorySize: 128
+      Layers:
+        - !Ref TwilioLayer      
+      Environment:
+        Variables:
+          # SEND_SMS is a simple feature flag. If you do not want to send
+          # reply SMS messages, change value to NO
+          SEND_SMS: "YES"          
+          ##############################################
+          # In this lambda the TWILIO Account SID and
+          # Auth Token are used to configure the
+          # Twilio Client.
+          ##############################################
+          # Set your Account Sid Auth Token below...
+          # DO NOT STORE VALUES LIKE THIS IN PRODUCTION CODE!...
+          TWILIO_ACCOUNT_SID: "<YOUR-TEST-TWILIO-ACCOUNT-SID>"
+          TWILIO_AUTH_TOKEN: "<YOUR-TEST-TWILIO-AUTH-TOKEN>"
+          # Use a secure method for production such as 
+          # pulling from the AWS Parameter Store or Secrets Manager.
+          # For example:
+          # TWILIO_AUTH_TOKEN: '{{resolve:ssm:TWILIO_ACCOUNT_SID}}'           
+          # TWILIO_AUTH_TOKEN: '{{resolve:ssm:TWILIO_AUTH_TOKEN}}'           
+      Events:
+        SNSEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref 'TwilioMessagingWebhookTopic'
+
+  ##########################################################################
+  # Roles
+  # 
+  # Role allows api gateway (used in api.yaml) to post messages directly
+  # to SQS queue.
+  ##########################################################################
+  TwilioMessagingWebhookApiRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - apigateway.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+      - PolicyName: AllowSqsIntegration
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'sqs:SendMessage'
+                - 'sqs:GetQueueUrl'
+                - 'sqs:SendMessageBatch'
+              Resource: !GetAtt TwilioMessagingWebhookQueue.Arn
+            - Effect: Allow
+              Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:DescribeLogGroups'
+                - 'logs:DescribeLogStreams'
+                - 'logs:PutLogEvents'
+                - 'logs:GetLogEvents'
+                - 'logs:FilterLogEvents'
+              Resource: !GetAtt TwilioMessagingWebhookApiLogs.Arn
+
+  ##########################################################################
+  #   Cloudwatch Logs                                                       
+  ##########################################################################
+  TwilioMessagingWebhookApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: TwilioMessagingWebhookApi-Access-Logs
+      RetentionInDays: 1
+
+##########################################################################
+#   Outputs
+##########################################################################
+Outputs:
+  TwilioMessagingWebhookApi:
+    Description: "HTTP API endpoint for Twilio Webhook"
+    Value: !Sub "https://${TwilioMessagingWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/twilio-webhook"  
