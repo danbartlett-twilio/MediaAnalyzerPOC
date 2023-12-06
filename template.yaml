@@ -97,17 +97,7 @@ Resources:
       CompatibleRuntimes:
         - nodejs18.x
       LicenseInfo: 'MIT'
-      RetentionPolicy: Retain
-  CryptoForTwilioWebhookLayer:
-    Type: AWS::Serverless::LayerVersion
-    Properties:
-      LayerName: CryptoForTwilioWebhook
-      Description: Used for cryptographic functionality
-      ContentUri: layers/layer-crypto-twilio-webhooks/
-      CompatibleRuntimes:
-        - nodejs18.x
-      LicenseInfo: 'MIT'
-      RetentionPolicy: Retain      
+      RetentionPolicy: Retain    
   OpenAILayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -157,7 +147,7 @@ Resources:
           ##############################################
           # Set your Auth Token below...
           # DO NOT STORE VALUES LIKE THIS IN PRODUCTION CODE!...
-          TWILIO_AUTH_TOKEN: "<YOUR-TEST-TWILIO-AUTH-TOKEN>"          
+          TWILIO_AUTH_TOKEN: "<YOUR-TEST-TWILIO-AUTH-TOKEN>"                    
           # Use a secure method for production such as 
           # pulling from the AWS Parameter Store or Secrets Manager.
           # For example:
@@ -166,7 +156,6 @@ Resources:
           SNS_MEDIA_TOPIC: !Ref TwilioMessagingWebhookMediaTopic
           REGION: !Ref "AWS::Region"
       Layers:
-        - !Ref CryptoForTwilioWebhookLayer
         - !Ref CalculateTwilioSignatureForWebhookLayer
       Events:
         TwilioMessagingWebhookQueueEvent:
