@@ -25,7 +25,7 @@ const mediaPrompts = {
     'category': 'Can this image be categorized as a photograph, a cartoon, a drawing, or a screenshot? Give your response in JSON where the category goes in the category variable and then add a description variable and give a concise description of the image. Respond with a JSON object with category and description properties.',
     'text': 'Is there any text in this image? If yes, what are the first few words.',
     'insurance':'Does this image show damage to a vehicle? If yes, where is the damage and what type of vehicle?',
-    'retail': 'Are the clothing items in this image Mens or Womens? What type of clothing is it?',
+    'retail': "Are the clothing items in this image from the Men’s or Women's Department? What type of clothing is it?",
     'recommend': 'Please recommend some products that go with the product in this image.',
     'tool': 'What type of tool should I use for this screw or bolt?',
     'repair':'Is there any appliance in this image and if yes, what type of appliance is in the image? Is there any damage to the appliance?',
